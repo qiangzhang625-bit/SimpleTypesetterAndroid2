@@ -11,17 +11,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show repo files (debug)
+      - name: List repo (debug)
         run: ls -lah
 
-      - name: Install unzip
+      - name: Ensure unzip
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      # 只解压，不再移动文件（避免覆盖 .github 目录）
+      # 自动寻找仓库里的 ZIP（不再要求固定文件名）
+      - name: Detect ZIP file
+        id: detect
+        run: |
+          set -e
+          echo "Looking for *.zip in repo root..."
+          ls -1 *.zip || true
+          ZIP_FILE=$(ls -1 *.zip | head -n 1 || true)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "❌ No zip file found in repo root. Please upload one *.zip."
+            exit 1
+          fi
+          echo "✅ Found ZIP: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> $GITHUB_ENV
+
       - name: Unzip project
-        run: unzip -o SimpleTypesetterAndroid.zip -d .
+        run: |
+          unzip -o "$ZIP_FILE" -d .
+        env:
+          ZIP_FILE: ${{ env.ZIP_FILE }}
+
+      # 自动探测项目目录（找到包含 settings.gradle 的目录）
+      - name: Detect project dir
+        id: proj
+        run: |
+          set -e
+          PROJ_DIR=$(find . -maxdepth 3 -type f -name "settings.gradle" -print -quit)
+          if [ -z "$PROJ_DIR" ]; then
+            echo "❌ settings.gradle not found after unzip."
+            exit 1
+          fi
+          PROJ_DIR=$(dirname "$PROJ_DIR")
+          echo "✅ Project dir: $PROJ_DIR"
+          echo "PROJ_DIR=$PROJ_DIR" >> $GITHUB_ENV
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -39,20 +70,19 @@ jobs:
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # 在解压出来的项目目录里构建
+      # 使用系统 Gradle 构建（不依赖项目内 wrapper）
       - name: Build Debug APK
-        working-directory: ./SimpleTypesetterAndroid
+        working-directory: ${{ env.PROJ_DIR }}
         run: |
-          # 使用系统Gradle（上面 setup-gradle 不是必须）
           curl -sL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o gradle.zip
           unzip -q gradle.zip
           ./gradle-8.7/bin/gradle assembleDebug
 
-      # 上传生成的 APK（注意子目录路径）
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug.apk
-          path: SimpleTypesetterAndroid/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJ_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
 
